@@ -58,6 +58,7 @@ extern "C" {
 #include <stddef.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <math.h>
 
 /* Internal type, do not use. */
 struct uv__queue {
@@ -603,6 +604,11 @@ UV_EXTERN int uv_tcp_nodelay(uv_tcp_t* handle, int enable);
 UV_EXTERN int uv_tcp_keepalive(uv_tcp_t* handle,
                                int enable,
                                unsigned int delay);
+UV_EXTERN int uv_tcp_keepalive_ex(uv_tcp_t* handle,
+                                  int on,
+                                  unsigned int idle,
+                                  unsigned int intvl,
+                                  unsigned int cnt);
 UV_EXTERN int uv_tcp_simultaneous_accepts(uv_tcp_t* handle, int enable);
 
 enum uv_tcp_flags {
@@ -740,6 +746,9 @@ struct uv_udp_send_s {
 UV_EXTERN int uv_udp_init(uv_loop_t*, uv_udp_t* handle);
 UV_EXTERN int uv_udp_init_ex(uv_loop_t*, uv_udp_t* handle, unsigned int flags);
 UV_EXTERN int uv_udp_open(uv_udp_t* handle, uv_os_sock_t sock);
+UV_EXTERN int uv_udp_open_ex(uv_udp_t* handle,
+                             uv_os_sock_t sock,
+                             unsigned int flags);
 UV_EXTERN int uv_udp_bind(uv_udp_t* handle,
                           const struct sockaddr* addr,
                           unsigned int flags);
@@ -805,10 +814,15 @@ struct uv_tty_s {
 typedef enum {
   /* Initial/normal terminal mode */
   UV_TTY_MODE_NORMAL,
-  /* Raw input mode (On Windows, ENABLE_WINDOW_INPUT is also enabled) */
+  /*
+   * Raw input mode (On Windows, ENABLE_WINDOW_INPUT is also enabled).
+   * May become equivalent to UV_TTY_MODE_RAW_VT in future libuv versions.
+   */
   UV_TTY_MODE_RAW,
   /* Binary-safe I/O mode for IPC (Unix-only) */
-  UV_TTY_MODE_IO
+  UV_TTY_MODE_IO,
+  /* Raw input mode. On Windows ENABLE_VIRTUAL_TERMINAL_INPUT is also set. */
+  UV_TTY_MODE_RAW_VT
 } uv_tty_mode_t;
 
 typedef enum {
@@ -1295,6 +1309,7 @@ typedef struct {
 } uv_rusage_t;
 
 UV_EXTERN int uv_getrusage(uv_rusage_t* rusage);
+UV_EXTERN int uv_getrusage_thread(uv_rusage_t* rusage);
 
 UV_EXTERN int uv_os_homedir(char* buffer, size_t* size);
 UV_EXTERN int uv_os_tmpdir(char* buffer, size_t* size);
@@ -1584,6 +1599,8 @@ UV_EXTERN int uv_fs_chmod(uv_loop_t* loop,
                           const char* path,
                           int mode,
                           uv_fs_cb cb);
+#define UV_FS_UTIME_NOW  (INFINITY)
+#define UV_FS_UTIME_OMIT (NAN)
 UV_EXTERN int uv_fs_utime(uv_loop_t* loop,
                           uv_fs_t* req,
                           const char* path,
@@ -1955,7 +1972,6 @@ UV_EXTERN void uv_wtf8_to_utf16(const char* wtf8,
                                 size_t utf16_len);
 
 /* Don't export the private CPP symbols. */
-#undef UV_HANDLE_TYPE_PRIVATE
 #undef UV_REQ_TYPE_PRIVATE
 #undef UV_REQ_PRIVATE_FIELDS
 #undef UV_STREAM_PRIVATE_FIELDS
@@ -1967,12 +1983,10 @@ UV_EXTERN void uv_wtf8_to_utf16(const char* wtf8,
 #undef UV_TIMER_PRIVATE_FIELDS
 #undef UV_GETADDRINFO_PRIVATE_FIELDS
 #undef UV_GETNAMEINFO_PRIVATE_FIELDS
-#undef UV_FS_REQ_PRIVATE_FIELDS
 #undef UV_WORK_PRIVATE_FIELDS
 #undef UV_FS_EVENT_PRIVATE_FIELDS
 #undef UV_SIGNAL_PRIVATE_FIELDS
 #undef UV_LOOP_PRIVATE_FIELDS
-#undef UV_LOOP_PRIVATE_PLATFORM_FIELDS
 #undef UV__ERR
 
 #ifdef __cplusplus
