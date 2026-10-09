@@ -1396,11 +1396,10 @@ static int uv__fs_copyfile(uv_fs_t* req) {
   bytes_to_send = src_statsbuf.st_size;
   in_offset = 0;
   while (bytes_to_send != 0) {
-    bytes_chunk = SSIZE_MAX;
+    bytes_chunk = UV__IO_MAX_BYTES;
     if (bytes_to_send < (off_t) bytes_chunk)
       bytes_chunk = bytes_to_send;
-    uv_fs_sendfile(NULL, &fs_req, dstfd, srcfd, in_offset, bytes_chunk, NULL);
-    bytes_written = fs_req.result;
+    bytes_written = uv_fs_sendfile(NULL, &fs_req, dstfd, srcfd, in_offset, bytes_chunk, NULL);
     uv_fs_req_cleanup(&fs_req);
 
     if (bytes_written < 0) {
@@ -2286,7 +2285,9 @@ void uv_fs_req_cleanup(uv_fs_t* req) {
     uv__free(req->bufs);
   req->bufs = NULL;
 
-  if (req->fs_type != UV_FS_OPENDIR && req->ptr != &req->statbuf)
+  if (req->fs_type != UV_FS_OPENDIR &&
+      req->fs_type != UV_FS_CLOSEDIR &&
+      req->ptr != &req->statbuf)
     uv__free(req->ptr);
   req->ptr = NULL;
 }

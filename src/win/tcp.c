@@ -52,20 +52,34 @@ static int uv__tcp_nodelay(uv_tcp_t* handle, SOCKET socket, int enable) {
 /*
  * Check if Windows version is 10.0.16299 (Windows 10, version 1709) or later.
  */
-static int uv__windows10_version1709(void) {
+static uv_once_t uv__windows10_version1709_once = UV_ONCE_INIT;
+static int uv__windows10_version1709_result;
+
+
+static void uv__windows10_version1709_init(void) {
   OSVERSIONINFOW os_info;
+
   if (!pRtlGetVersion)
-    return 0;
+    return;
+
   os_info.dwOSVersionInfoSize = sizeof(os_info);
   os_info.szCSDVersion[0] = L'\0';
-  pRtlGetVersion(&os_info);
+
+  if (pRtlGetVersion(&os_info) != STATUS_SUCCESS)
+    abort();
+
   if (os_info.dwMajorVersion < 10)
-    return 0;
-  if (os_info.dwMajorVersion > 10)
-    return 1;
-  if (os_info.dwMinorVersion > 0)
-    return 1;
-  return os_info.dwBuildNumber >= 16299;
+    return;
+
+  uv__windows10_version1709_result = os_info.dwMajorVersion > 10 ||
+                                       os_info.dwMinorVersion > 0 ||
+                                       os_info.dwBuildNumber >= 16299;
+}
+
+
+static int uv__windows10_version1709(void) {
+  uv_once(&uv__windows10_version1709_once, uv__windows10_version1709_init);
+  return uv__windows10_version1709_result;
 }
 
 
@@ -859,7 +873,7 @@ static int uv__tcp_try_connect(uv_connect_t* req,
    */
   if (uv__windows10_version1709() && uv__is_loopback(&converted)) {
     memset(&retransmit_ioctl, 0, sizeof(retransmit_ioctl));
-    retransmit_ioctl.Rtt = TCP_INITIAL_RTO_NO_SYN_RETRANSMISSIONS;
+    retransmit_ioctl.Rtt = TCP_INITIAL_RTO_DEFAULT_RTT;
     retransmit_ioctl.MaxSynRetransmissions = TCP_INITIAL_RTO_NO_SYN_RETRANSMISSIONS;
     WSAIoctl(handle->socket,
              SIO_TCP_INITIAL_RTO,
@@ -948,6 +962,7 @@ int uv__tcp_write(uv_loop_t* loop,
   UV_REQ_INIT(req, UV_WRITE);
   req->handle = (uv_stream_t*) handle;
   req->cb = cb;
+  req->write_extra.nwritten = 0;
 
   /* Prepare the overlapped structure. */
   memset(&(req->u.io.overlapped), 0, sizeof(req->u.io.overlapped));
@@ -1160,12 +1175,14 @@ done:
 
 void uv__process_tcp_write_req(uv_loop_t* loop, uv_tcp_t* handle,
     uv_write_t* req) {
+  uv_shutdown_t* shutdown_req;
   int err;
 
   assert(handle->type == UV_TCP);
 
   assert(handle->write_queue_size >= req->u.io.queued_bytes);
   handle->write_queue_size -= req->u.io.queued_bytes;
+  req->write_extra.nwritten += req->u.io.overlapped.InternalHigh;
 
   UNREGISTER_HANDLE_REQ(loop, handle);
 
@@ -1180,6 +1197,16 @@ void uv__process_tcp_write_req(uv_loop_t* loop, uv_tcp_t* handle,
     }
   }
 
+  /* Retire the request before running the callback. uv__tcp_try_write() bails
+   * out with UV_EAGAIN while writes are in flight and there is nothing left in
+   * flight when this was the last one. */
+  handle->stream.conn.write_reqs_pending--;
+
+  /* Only a shutdown request that is already pending is ours to dispatch below.
+   * One that the callback starts is queued by uv_shutdown() itself, because it
+   * now observes write_reqs_pending == 0. */
+  shutdown_req = handle->stream.conn.shutdown_req;
+
   if (req->cb) {
     err = uv_translate_sys_error(GET_REQ_SOCK_ERROR(req));
     if (err == UV_ECONNABORTED) {
@@ -1189,16 +1216,15 @@ void uv__process_tcp_write_req(uv_loop_t* loop, uv_tcp_t* handle,
     req->cb(req, err);
   }
 
-  handle->stream.conn.write_reqs_pending--;
   if (handle->stream.conn.write_reqs_pending == 0) {
-    if (handle->flags & UV_HANDLE_CLOSING) {
+    /* The socket is already gone when the callback called uv_close(). */
+    if (handle->flags & UV_HANDLE_CLOSING &&
+        handle->socket != INVALID_SOCKET) {
       closesocket(handle->socket);
       handle->socket = INVALID_SOCKET;
     }
-    if (uv__is_stream_shutting(handle))
-      uv__process_tcp_shutdown_req(loop,
-                                   handle,
-                                   handle->stream.conn.shutdown_req);
+    if (shutdown_req != NULL)
+      uv__process_tcp_shutdown_req(loop, handle, shutdown_req);
   }
 
   DECREASE_PENDING_REQ_COUNT(handle);
